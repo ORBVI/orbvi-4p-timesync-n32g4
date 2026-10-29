@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Passive orbvi-4p receiver for the N32 demo GPS PPS + RMC stream.
+"""Passive receiver for the N32 simulated PPS + ZDA/RMC stream.
 
-Never writes UART, CLOCK_REALTIME or RTC; validates PPS/RMC pairing only.
+Never writes UART, CLOCK_REALTIME or RTC; validates PPS/time pairing only.
 """
 import argparse
 import datetime
@@ -36,11 +36,35 @@ def valid_rmc(raw):
         return None
 
 
+def valid_zda(raw):
+    match = re.fullmatch(rb'\$GPZDA,(\d{6})\.00,(\d{2}),(\d{2}),(\d{4}),00,00\*([0-9A-F]{2})', raw)
+    if not match:
+        return None
+    checksum = 0
+    for byte in raw[1:raw.index(b'*')]:
+        checksum ^= byte
+    if checksum != int(match.group(5), 16):
+        return None
+    year = int(match.group(4))
+    if not 2000 <= year <= 2099:
+        return None
+    clock = match.group(1)
+    try:
+        return datetime.datetime(year, int(match.group(3)), int(match.group(2)),
+                                 int(clock[:2]), int(clock[2:4]), int(clock[4:]))
+    except ValueError:
+        return None
+
+
+def valid_sentence(raw, protocol='ZDA'):
+    return {'ZDA': valid_zda, 'RMC': valid_rmc}[protocol](raw)
+
+
 def expected_utc(first_utc, first_sequence, sequence):
     return first_utc + datetime.timedelta(seconds=sequence - first_sequence)
 
 
-def probe(port, pps, expect_first, duration):
+def probe(port, pps, expect_first, duration, protocol='ZDA'):
     path = '/sys/class/pps/' + pps + '/assert'
     if not os.path.isfile(path):
         raise RuntimeError('PPS assert node missing: ' + path)
@@ -62,10 +86,10 @@ def probe(port, pps, expect_first, duration):
             previous = open(path, encoding='ascii').read().strip()
             initial_sequence = pps_sequence(previous)
             current_sequence = initial_sequence
-            print('PPS initial', previous, '(listening only)', flush=True)
+            print('PPS initial', previous, 'protocol=' + protocol, '(listening only)', flush=True)
             deadline = time.monotonic() + duration
             rx = bytearray()
-            rmc_count = pps_count = matched = 0
+            sentence_count = pps_count = matched = 0
             last_matched = initial_sequence
             first_utc = first_sequence = None
             mismatches = 0
@@ -89,7 +113,7 @@ def probe(port, pps, expect_first, duration):
                         line, _, tail = rx.partition(b'\n')
                         rx = bytearray(tail)
                         line = line.rstrip(b'\r')
-                        decoded = valid_rmc(line)
+                        decoded = valid_sentence(line, protocol)
                         if decoded and first_utc is None and current_sequence > initial_sequence:
                             first_utc, first_sequence = decoded, current_sequence
                         target = (expected_utc(first_utc, first_sequence, current_sequence)
@@ -100,7 +124,7 @@ def probe(port, pps, expect_first, duration):
                         print('UART', repr(bytes(line)),
                               ('UTC=' + decoded.isoformat()) if decoded else 'INVALID',
                               'PPS#%d' % current_sequence, 'MATCH' if paired else 'MISMATCH', flush=True)
-                        rmc_count += bool(decoded)
+                        sentence_count += bool(decoded)
                         if paired:
                             matched += 1
                             last_matched = current_sequence
@@ -109,8 +133,8 @@ def probe(port, pps, expect_first, duration):
                     if len(rx) > 256:
                         print('UART discarded overlong partial line', flush=True)
                         rx.clear()
-            print('SUMMARY pps_edges=%d valid_rmc=%d paired=%d mismatches=%d' %
-                  (pps_count, rmc_count, matched, mismatches), flush=True)
+            print('SUMMARY pps_edges=%d valid_%s=%d paired=%d mismatches=%d' %
+                  (pps_count, protocol.lower(), sentence_count, matched, mismatches), flush=True)
             return 0 if pps_count >= 2 and matched >= 2 and mismatches == 0 else 1
         finally:
             termios.tcsetattr(fd, termios.TCSANOW, settings)
@@ -120,9 +144,11 @@ def probe(port, pps, expect_first, duration):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--protocol', choices=('ZDA', 'RMC'), default='ZDA',
+                        help='Must match the firmware TIME_PROTOCOL (default: ZDA)')
     parser.add_argument('--port', default='/dev/ttyS1')
     parser.add_argument('--pps', default='pps1')
-    parser.add_argument('--expect-first', help='Require first observed RMC at next PPS = YYYYMMDDhhmmss (start before N32 reset)')
+    parser.add_argument('--expect-first', help='Require first observed time sentence at next PPS = YYYYMMDDhhmmss (start before N32 reset)')
     parser.add_argument('--duration', type=float, default=5)
     args = parser.parse_args()
     try:
@@ -133,7 +159,7 @@ def main():
             parser.error('duration must be >= 2 s')
     except ValueError:
         parser.error('invalid first UTC')
-    return probe(args.port, args.pps, first, args.duration)
+    return probe(args.port, args.pps, first, args.duration, args.protocol)
 
 
 if __name__ == '__main__':

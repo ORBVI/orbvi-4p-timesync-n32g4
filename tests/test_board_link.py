@@ -1,4 +1,4 @@
-"""Host-side smoke tests for the board's strict RMC/PPS passive probe."""
+"""Host-side smoke tests for the board's strict ZDA/RMC + PPS passive probe."""
 import datetime
 import importlib.util
 import pathlib
@@ -43,6 +43,33 @@ class ProbeTests(unittest.TestCase):
             self.assertIsNone(probe.valid_rmc(sentence(body)))
         self.assertIsNone(probe.valid_rmc(sentence('GPZDA,123000.00,24,09,2026,00,00')))
         self.assertIsNone(probe.valid_rmc(sentence(good) + b'\r'))
+
+    def test_zda_default_and_selected_protocol(self):
+        raw = sentence('GPZDA,123000.00,24,09,2026,00,00')
+        expected = datetime.datetime(2026, 9, 24, 12, 30)
+        self.assertEqual(probe.valid_zda(raw), expected)
+        self.assertEqual(probe.valid_sentence(raw), expected)
+        self.assertIsNone(probe.valid_sentence(raw, 'RMC'))
+        rmc = sentence('GPRMC,123000.00,V,,,,,,,240926,,,N')
+        self.assertEqual(probe.valid_sentence(rmc, 'RMC'), expected)
+        self.assertIsNone(probe.valid_sentence(rmc))
+        for year in (2000, 2025, 2099):
+            self.assertEqual(probe.valid_zda(sentence('GPZDA,235959.00,31,12,%04d,00,00' % year)),
+                             datetime.datetime(year, 12, 31, 23, 59, 59))
+
+    def test_zda_rejects_invalid_checksum_date_and_fields(self):
+        raw = sentence('GPZDA,123000.00,24,09,2026,00,00')
+        self.assertIsNone(probe.valid_zda(raw[:-2] + b'FF'))
+        for body in ('GPZDA,123000.00,29,02,2023,00,00',
+                     'GPZDA,246000.00,24,09,2026,00,00',
+                     'GPZDA,123000.01,24,09,2026,00,00',
+                     'GPZDA,123000.00,24,09,1999,00,00',
+                     'GPZDA,123000.00,24,09,2100,00,00',
+                     'GPZDA,123000.00,24,09,2026,08,00',
+                     'GNZDA,123000.00,24,09,2026,00,00',
+                     'GPZDA,123000.00,24,09,2026,00,00,extra'):
+            self.assertIsNone(probe.valid_zda(sentence(body)))
+        self.assertIsNone(probe.valid_zda(raw + b'\r'))
 
     def test_sequence_to_utc_pairing(self):
         first = datetime.datetime(2025, 1, 1)
