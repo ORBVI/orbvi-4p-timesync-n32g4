@@ -61,6 +61,27 @@ static void digits(char *dst, unsigned value, unsigned width)
     while (width) { dst[--width] = (char)('0' + value % 10u); value /= 10u; }
 }
 
+static size_t finish_sentence(char *dst, size_t length)
+{
+    uint8_t checksum = 0;
+    size_t star = 1;
+    while (dst[star] != '*') { checksum ^= (uint8_t)dst[star]; ++star; }
+    static const char hex[] = "0123456789ABCDEF";
+    dst[star + 1] = hex[checksum >> 4]; dst[star + 2] = hex[checksum & 15u];
+    return length;
+}
+
+size_t utc_format_zda(const UtcTime *t, char *dst, size_t capacity)
+{
+    /* $GPZDA,hhmmss.00,dd,mm,yyyy,00,00*XX\r\n : 38 bytes. */
+    static const char template[] = "$GPZDA,000000.00,00,00,0000,00,00*00\r\n";
+    if (!dst || capacity < sizeof template || !utc_valid(t)) return 0;
+    for (size_t i = 0; i < sizeof template; ++i) dst[i] = template[i];
+    digits(dst + 7, t->hour, 2); digits(dst + 9, t->minute, 2); digits(dst + 11, t->second, 2);
+    digits(dst + 17, t->day, 2); digits(dst + 20, t->month, 2); digits(dst + 23, t->year, 4);
+    return finish_sentence(dst, sizeof(template) - 1u);
+}
+
 size_t utc_format_rmc(const UtcTime *t, char *dst, size_t capacity)
 {
     /* $GPRMC,hhmmss.00,V,,,,,,,ddmmyy,,,N*XX\r\n : 40 bytes. */
@@ -69,10 +90,14 @@ size_t utc_format_rmc(const UtcTime *t, char *dst, size_t capacity)
     for (size_t i = 0; i < sizeof template; ++i) dst[i] = template[i];
     digits(dst + 7, t->hour, 2); digits(dst + 9, t->minute, 2); digits(dst + 11, t->second, 2);
     digits(dst + 25, t->day, 2); digits(dst + 27, t->month, 2); digits(dst + 29, t->year % 100u, 2);
-    uint8_t checksum = 0;
-    size_t star = 1;
-    while (dst[star] != '*') { checksum ^= (uint8_t)dst[star]; ++star; }
-    static const char hex[] = "0123456789ABCDEF";
-    dst[star + 1] = hex[checksum >> 4]; dst[star + 2] = hex[checksum & 15u];
-    return sizeof(template) - 1u;
+    return finish_sentence(dst, sizeof(template) - 1u);
+}
+
+size_t utc_format_sentence(const UtcTime *t, char *dst, size_t capacity)
+{
+#if TIME_PROTOCOL == TIME_PROTOCOL_ZDA
+    return utc_format_zda(t, dst, capacity);
+#else
+    return utc_format_rmc(t, dst, capacity);
+#endif
 }

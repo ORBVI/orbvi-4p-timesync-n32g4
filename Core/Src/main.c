@@ -18,7 +18,7 @@
 static const UtcTime demo_boot_utc = {2025u, 1u, 1u, 0u, 0u, 0u};
 
 /* Observe via J-Link while diagnosing USART2 wiring; never printed on time UART. */
-volatile uint32_t timesync_rx_bytes, timesync_rmc_sent;
+volatile uint32_t timesync_rx_bytes, timesync_zda_sent, timesync_rmc_sent;
 static volatile uint8_t rx[RX_SIZE];
 static volatile uint8_t rx_head, rx_tail, rx_overflow;
 static volatile uint32_t edge_sequence;
@@ -179,15 +179,21 @@ static void process_rx(void)
     }
 }
 
-static void send_rmc(const UtcTime *t)
+static void send_time_sentence(const UtcTime *t)
 {
-    char sentence[41];
-    size_t len = utc_format_rmc(t, sentence, sizeof sentence);
+    char sentence[UTC_SENTENCE_CAPACITY];
+    size_t len = utc_format_sentence(t, sentence, sizeof sentence);
     for (size_t i = 0; i < len; ++i) {
         while (USART_GetFlagStatus(USART2, USART_FLAG_TXDE) == RESET) {}
         USART_SendData(USART2, (uint16_t)(uint8_t)sentence[i]);
     }
-    if (len) ++timesync_rmc_sent;
+    if (len) {
+#if TIME_PROTOCOL == TIME_PROTOCOL_ZDA
+        ++timesync_zda_sent;
+#else
+        ++timesync_rmc_sent;
+#endif
+    }
 }
 
 int main(void)
@@ -219,7 +225,7 @@ int main(void)
         if (!irq) __enable_irq();
         if (seq != last_edge) {
             last_edge = seq;
-            if (valid) send_rmc(&t);
+            if (valid) send_time_sentence(&t);
         }
     }
 }
