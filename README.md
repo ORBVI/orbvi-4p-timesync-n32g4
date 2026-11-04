@@ -35,4 +35,4 @@ make TIME_PROTOCOL=RMC
 
 仅在需要单独检查某种输出时使用 `tools/board_link_test.py --protocol ZDA|RMC`；具体参数见 `--help`。实线 UART/PPS 尚需上板验证，主机测试不代表硬件通过。
 
-板端操作见 [ORBVI 4P 使用指南](https://huanshizhineng.feishu.cn/wiki/GoeUwlTiRiaY5skses2crmPFnCg?fromScene=spaceOverview)。
+板端操作见 [ORBVI 4P 使用指南](https://huanshizhineng.feishu.cn/wiki/RxH8wzbVgioHgXk5GqEcy67Uned)。
